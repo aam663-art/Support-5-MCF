@@ -209,16 +209,16 @@ if page == "Strategic Overview":
     with head_l:
         st.title("Account Health and Churn Risk")
         st.markdown(
-            "- Jul-Dec 2024 tickets, Jan-Jun 2025 full churn (21 leavers / 313 accounts).\n"
-            "- Health Score = half ranked logit (Avg Days To Close) + half Ops Score. No close time gets a 25 on the logit piece.\n"
-            "- Colors are relative on that combined score (Red lowest 25%, Yellow next 25%, Green the rest)."
+            "- Jul-Dec 2024 Training data, Jan-Jun 2025 Churn Modeling (21 Churn / 313 accounts).\n"
+            "- Health Score = half logit (Avg Days To Close) + half Ops Score. Note: if no close time I put a 25 as default on the logit\n"
+            "- Risk Colors are relative on that combined score (Red lowest 25%, Yellow next 25%, Green is the remaining)."
         )
     with head_r:
         st.markdown(
             "<div class='dollar-hero'>"
             "<p class='dollar-label'>Potential $ at risk</p>"
             f"<p class='dollar-num'>{dollars_str}</p>"
-            "<p class='dollar-cap'>Assumes Red accounts.</p>"
+            "<p class='dollar-cap'>Assumes Red Accounts Churn</p>"
             "</div>",
             unsafe_allow_html=True,
         )
@@ -351,7 +351,7 @@ if page == "Strategic Overview":
     st.markdown("---")
     # this is the only variable that stayed in the logit
     st.header("Distribution of Avg Days To Close")
-    st.caption("Only variable kept in the logit. Leavers with a close time averaged about 20 days vs 31 for accounts that stayed.")
+    st.caption("Only variable kept in the logit. Churner's had a close time that averaged about 20 days vs 31 for accounts that stayed.")
 
     vals = scores["Avg_Days_To_Close"].dropna() if "Avg_Days_To_Close" in scores.columns else pd.Series()
     if not vals.empty:
@@ -406,8 +406,8 @@ if page == "Strategic Overview":
     # sentiment histogram + the theme table from step 7
     st.header("3. Customer Comments and Sentiment")
     st.caption(
-        "Jul-Dec 2024 comments for every account that has a comment in that window, not only the 313 in the logit. "
-        "I did not include 2025-2026 comments so this stays in the same window as the model."
+        "Analyzed Jul-Dec 2024 comments for every account that has a comment in that window. "
+        "I did not include 2025-2026 comments so this stays in the same timeframe as the model."
     )
 
     col_sent, col_nlp = st.columns(2)
@@ -454,7 +454,7 @@ if page == "Strategic Overview":
 
             chart = (bars + rule_neg + rule_pos).properties(height=340)
             st.altair_chart(chart, width="stretch")
-            st.caption("Dashed lines show the cutoffs: negative below -0.05, positive above +0.05.")
+            st.caption("Dashed lines show the cutoffs. negative is below -0.05 and positive above +0.05")
 
     with col_nlp:
         # color the rows by domain so its easier to scan
@@ -490,7 +490,7 @@ if page == "Strategic Overview":
             )
             st.dataframe(styled, hide_index=True, width="stretch")
             st.caption(
-                "Row colors: Yellow = Billing · Red = Hardware · Blue = Portal · Purple = Support Queue · Teal = Field"
+                "Row colors: Yellow = Billing, Red = Hardware, Blue = Portal, Purple = Support Queue, Teal = Field"
             )
         else:
             st.info("This table is missing. Run the notebook export cell again.")
@@ -536,7 +536,7 @@ if page == "Strategic Overview":
 # page 2 is one account at a time
 elif page == "Operator Overview":
     st.title("Operator Overview")
-    st.caption("Color is the combined Health Score rank (half ranked logit, half Ops Score).")
+    st.caption("Color is the combined Health Score rank (half logit, half Ops Score).")
 
     # filter the account list by color first, then pick one account
     st.sidebar.markdown("### Filters")
@@ -608,7 +608,7 @@ elif page == "Operator Overview":
                 except (TypeError, ValueError):
                     return str(v)
 
-            # health is half ranked logit / half ops. ops is the average of the 3 scores below.
+            # health is half logit / half ops. ops is the average of the 3 scores below.
             st.subheader("Numbers for this account")
             ops_val = pd.to_numeric(acct_row["Ops_Score"], errors="coerce").iloc[0] if "Ops_Score" in acct_row.columns else np.nan
             r1 = st.columns(4)
@@ -616,7 +616,7 @@ elif page == "Operator Overview":
             r1[1].metric("Ops Score", f"{ops_val:.1f} / 100" if pd.notna(ops_val) else "n/a")
             r1[2].metric("Risk status", TIER_LABEL.get(tier_val, tier_val))
             r1[3].metric("What happened", "Churned between Jan-Jun 2025" if churn_flag == 1 else "Stayed")
-            st.caption("Health Score = half ranked logit + half Ops Score. No close time gets a 25 on the logit piece. The three scores below make up Ops Score.")
+            st.caption("Health Score = half  logit + half Ops Score. No close time gets a 25 default score on the logit piece. The three scores below make up Ops Score.")
 
             r2 = st.columns(4)
             r2[0].metric("Avg days to close", _fmt_metric("Avg_Days_To_Close", "score"))
@@ -821,7 +821,12 @@ else:
     with col_m2:
         st.subheader("Model Settings")
         if not meta.empty:
-            st.dataframe(meta, hide_index=True, width="stretch")
+            meta_view = meta.copy()
+            if "item" in meta_view.columns:
+                meta_view = meta_view[~meta_view["item"].isin(
+                    ["risk_tier_rule", "vader_status", "claim_type", "n_insufficient_close_time"]
+                )]
+            st.dataframe(meta_view, hide_index=True, width="stretch")
         else:
             st.info("The model settings table is missing.")
 
@@ -836,7 +841,8 @@ else:
             feat = disq_view["feature"].astype(str) if "feature" in disq_view.columns else pd.Series("", index=disq_view.index)
             is_exp = feat.eq("Expansion_Health_Score")
             disq_view.loc[is_exp, "reason"] = "Does not fit defined health score / not enough time"
-            disq_view.loc[~is_exp & disq_view["reason"].eq("Does not fit defined health score"), "reason"] = "statistically removed"
+            disq_view.loc[disq_view["reason"].eq("Not actionable"), "reason"] = "Statistically Removed"
+            disq_view.loc[~is_exp & disq_view["reason"].eq("Does not fit defined health score"), "reason"] = "Statistically Removed"
         st.dataframe(disq_view, hide_index=True, width="stretch")
     else:
         st.info("No variables were dropped.")
