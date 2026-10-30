@@ -1,0 +1,10 @@
+pandas
+numpy
+statsmodels
+scikit-learn
+matplotlib
+streamlit
+altair
+vaderSentiment
+openpyxl
+jupyter
