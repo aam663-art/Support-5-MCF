@@ -1,5 +1,3 @@
-# this is the streamlit dashboard. it doesnt rebuild the model.
-# keep app.py, mcf_support_5_health.csv, and requirements.txt in the same folder.
 
 from pathlib import Path
 import io
@@ -9,13 +7,15 @@ import numpy as np
 import streamlit as st
 import altair as alt
 
-# if i run this as a .py file, __file__ works. if i run the cell in jupyter it doesnt, so i hardcode the milestone 2 folder.
 try:
     HERE = Path(__file__).resolve().parent
 except NameError:
     HERE = Path("/Users/aatifmohammed/Desktop/GA Tech Masters/PRACTICUM/Milestone 2")
 
 BUNDLE_NAME = "mcf_support_5_health.csv"
+
+# this is the streamlit dashboard. Because of the complexity of coding I had a difficult time, i used AI to create templates which 
+# i then modified. i made sure to avoid sharing or upload any data to it. 
 
 
 def _first_json(series):
@@ -146,7 +146,7 @@ st.set_page_config(
 AXIS = dict(labelFontSize=15, titleFontSize=16, labelLimit=480, titleLimit=520)
 LEGEND = dict(labelFontSize=14, titleFontSize=15)
 
-# this just makes the text a bit bigger so its easier to read on a laptop
+# sizing of text
 st.markdown("""
 <style>
     html, body, [class*="css"] {
@@ -183,7 +183,7 @@ st.sidebar.caption("Team: Support 5")
 st.sidebar.caption("Aatif Ahmed Mohammed")
 st.sidebar.markdown("---")
 
-# csv has to be uploaded before anything else loads
+# csv has to be uploaded 
 uploaded = st.sidebar.file_uploader("CSV", type=["csv"])
 if uploaded is None:
     st.title("Account Health and Churn Risk")
@@ -198,14 +198,14 @@ if scores.empty:
     st.error("That csv did not have any account rows.")
     st.stop()
 
-# rename the platform labels so they match what i used in the notebook
+# rename the platform labels
 if "Platform" in scores.columns:
     scores["Platform"] = scores["Platform"].replace({
         "CONNECT": "Native Michelin CF",
         "Marcus": "Legacy Marcus/ NexTraq",
     })
 
-# ops score is the average of queue / field / voc. it is half of the health score now.
+
 SUB_COLS = [c for c in ["Support_Queue_Subscore", "Field_Deployment_Subscore", "VoC_Sentiment_Subscore"] if c in scores.columns]
 if SUB_COLS:
     scores["Ops_Score"] = scores[SUB_COLS].mean(axis=1)
@@ -213,7 +213,7 @@ if SUB_COLS:
 if "Top3_Risk_Drivers" in scores.columns:
     scores["Top3_Risk_Drivers"] = scores["Top3_Risk_Drivers"].replace("Low Operational Friction Observed", "None")
 
-# sidebar is just page picker + the dollar assumption
+# sidebar of the webpage
 page = st.sidebar.radio(
     "Pages",
     [
@@ -227,7 +227,7 @@ TIER_ORDER = ["Green", "Yellow", "Red"]
 TIER_COLORS = ["#28a745", "#ffc107", "#dc3545"]
 TIER_LABEL = {"Green": "Green", "Yellow": "Yellow", "Red": "Red"}
 
-# default the operator page to the lowest health score account (the riskiest one we actually scored)
+# default lowest health score account
 scored_mask = scores["Health_Score"].notna() if "Health_Score" in scores.columns else pd.Series(False, index=scores.index)
 if scored_mask.any():
     riskiest_idx = scores.loc[scored_mask, "Health_Score"].idxmin()
@@ -235,9 +235,16 @@ if scored_mask.any():
 else:
     default_account = scores["ent_name"].iloc[0] if "ent_name" in scores.columns and not scores.empty else "(portfolio)"
 
-# page 1 is the leadership / overview page
+#leadership / overview page
 if page == "Strategic Overview":
-    # this is not real arr from the files. i just multiply accounts by a number i pick for the demo.
+    # $ at risk is a planning number, not recovered ARR from the extract.
+    # student_release ARR is transformed (log / scaled) so i cannot turn it back into dollars.
+    # formula: count of Red accounts * assumed annual value per account.
+    # only Red. i treat those as "if this slice churns, this is the $ on the table."
+    # i leave the $ per account as a slider so leadership can try $25k / $50k / etc without
+    # pretending i know the real contract value. default $25k is just a round demo number.
+    # this stays on strategic overview only. operator page is one account at a time so a
+    # portfolio $ figure would be misleading there.
     st.sidebar.markdown("---")
     st.sidebar.markdown("### Planning assumption")
     assumed_arr = st.sidebar.number_input(
@@ -247,15 +254,12 @@ if page == "Strategic Overview":
         value=25000,
         step=5000,
     )
-    st.sidebar.caption(
-        "Not from this extract. Released ARR is transformed and cannot be turned back into dollars. "
-        "Change this number for the demo."
-    )
 
     n_eval = int(len(scores))
     n_red = int((scores["Risk_Tier"].astype(str).str.strip() == "Red").sum()) if "Risk_Tier" in scores.columns else 0
     n_yellow = int((scores["Risk_Tier"].astype(str).str.strip() == "Yellow").sum()) if "Risk_Tier" in scores.columns else 0
     n_green = int((scores["Risk_Tier"].astype(str).str.strip() == "Green").sum()) if "Risk_Tier" in scores.columns else 0
+    # n_red * assumed_arr. if they move the slider, this hero number moves with it.
     dollars_review = n_red * float(assumed_arr)
     dollars_str = f"${dollars_review/1_000_000:.1f}M" if dollars_review >= 1_000_000 else f"${dollars_review:,.0f}"
 
@@ -382,7 +386,7 @@ if page == "Strategic Overview":
                 width="stretch"
             )
 
-    # extra ops histogram, under the original three charts
+    # ops histogram
     st.subheader("How Overall \"Ops Score\" is Spread")
     ops_vals = scores["Ops_Score"].dropna() if "Ops_Score" in scores.columns else pd.Series()
     if not ops_vals.empty:
@@ -457,7 +461,7 @@ if page == "Strategic Overview":
 
     st.markdown("---")
 
-    # sentiment histogram + the theme table from step 7
+    # sentiment histogram 
     st.header("3. Customer Comments and Sentiment")
     st.caption(
         "Analyzed Jul-Dec 2024 comments for every account that has a comment in that window. "
@@ -467,7 +471,7 @@ if page == "Strategic Overview":
     col_sent, col_nlp = st.columns(2)
 
     with col_sent:
-        # -1 is negative, +1 is positive. i use vader cutoffs of -0.05 and +0.05
+
         st.subheader("How Sentiment Scores Are Spread for Accounts")
         sent_src = nlp_sent if not nlp_sent.empty and "Mean_Sentiment_Score" in nlp_sent.columns else scores
         if "Mean_Sentiment_Score" in sent_src.columns:
@@ -511,7 +515,7 @@ if page == "Strategic Overview":
             st.caption("Dashed lines show the cutoffs. negative is below -0.05 and positive above +0.05")
 
     with col_nlp:
-        # color the rows by domain so its easier to scan
+
         st.subheader("NLP Root-Cause Issues for Cases")
         if not nlp_themes.empty:
             theme_counts = nlp_themes.copy()
@@ -549,7 +553,7 @@ if page == "Strategic Overview":
         else:
             st.info("This table is missing. Run the notebook export cell again.")
 
-    # same theme table but rolled up into 5 bars
+
     st.subheader("NLP Root-Cause Category Count")
     if not nlp_themes.empty and "Primary Domain" in nlp_themes.columns:
         freq_col = "Frequency" if "Frequency" in nlp_themes.columns else nlp_themes.columns[1]
@@ -587,12 +591,12 @@ if page == "Strategic Overview":
     else:
         st.info("This chart uses the theme table above, which is missing.")
 
-# page 2 is one account at a time
+# operator page
 elif page == "Operator Overview":
     st.title("Operator Overview")
     st.caption("Color is the combined Health Score rank (half logit, half Ops Score).")
 
-    # filter the account list by color first, then pick one account
+
     st.sidebar.markdown("### Filters")
     filtered = scores.copy()
     if "Risk_Tier" in filtered.columns:
@@ -672,7 +676,7 @@ elif page == "Operator Overview":
                 except (TypeError, ValueError):
                     return str(v)
 
-            # health is half logit / half ops. ops is the average of the 3 scores below.
+
             st.subheader("Numbers for this account")
             ops_val = pd.to_numeric(acct_row["Ops_Score"], errors="coerce").iloc[0] if "Ops_Score" in acct_row.columns else np.nan
             r1 = st.columns(4)
@@ -747,7 +751,7 @@ elif page == "Operator Overview":
                 r7[0].metric(p_label, one_name)
                 r7[1].metric("Touches", f"{int(touches):,}" if pd.notna(touches) else "n/a")
 
-            # explain why this account got its color
+            # explain why the account got its color
             if tier_val == "Red":
                 why = "**Red** = combined Health Score is in the lowest 25%."
             elif tier_val == "Yellow":
@@ -764,7 +768,7 @@ elif page == "Operator Overview":
             else:
                 st.success(why)
 
-            # this strip chart is just days to close vs the other scored accounts
+
             st.markdown("---")
             st.subheader("Days To Close Risk")
             st.caption("Shorter close times = higher predicted churn in this sample.")
@@ -915,7 +919,7 @@ elif page == "Operator Overview":
                     show_p = show_p.sort_values("Person")
                 st.dataframe(show_p, hide_index=True, width="stretch")
 
-# page 3 is just the model tables (what stayed in, what got dropped)
+# model summary page
 else:
     st.title("Model Summary")
     if "Is_Churned" in scores.columns and "Risk_Tier" in scores.columns:
