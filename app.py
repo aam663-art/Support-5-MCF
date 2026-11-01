@@ -276,7 +276,7 @@ if page == "Strategic Overview":
             "<div class='dollar-hero'>"
             "<p class='dollar-label'>Potential $ at risk</p>"
             f"<p class='dollar-num'>{dollars_str}</p>"
-            "<p class='dollar-cap'>Assumes Red Accounts Churn</p>"
+            "<p class='dollar-cap'>Red Account Value</p>"
             "</div>",
             unsafe_allow_html=True,
         )
