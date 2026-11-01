@@ -71,11 +71,65 @@ def unpack_bundle(scores_raw):
     if "model_json" in scores.columns:
         scores = scores.drop(columns=["model_json"])
 
+    linkage_rows = []
+    if "linkage_json" in scores.columns:
+        for _, row in scores.iterrows():
+            raw = row.get("linkage_json")
+            if not isinstance(raw, str) or not raw.strip() or raw.strip() == "[]":
+                continue
+            try:
+                items = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                rec = dict(item)
+                rec["ent_num"] = row.get("ent_num")
+                linkage_rows.append(rec)
+        scores = scores.drop(columns=["linkage_json"])
+    linkage = pd.DataFrame(linkage_rows)
+
+    if "n_child_sites" not in scores.columns:
+        if not linkage.empty and "role" in linkage.columns:
+            child_n = (
+                linkage.assign(_child=linkage["role"].astype(str).str.strip().eq("Child site"))
+                .groupby("ent_num")["_child"].sum()
+            )
+            scores["n_child_sites"] = scores["ent_num"].map(child_n).fillna(0).astype(int)
+        else:
+            scores["n_child_sites"] = 0
+    else:
+        scores["n_child_sites"] = pd.to_numeric(scores["n_child_sites"], errors="coerce").fillna(0).astype(int)
+
+    people_rows = []
+    if "people_json" in scores.columns:
+        for _, row in scores.iterrows():
+            raw = row.get("people_json")
+            if not isinstance(raw, str) or not raw.strip() or raw.strip() == "[]":
+                continue
+            try:
+                items = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                rec = dict(item)
+                rec["ent_num"] = row.get("ent_num")
+                people_rows.append(rec)
+        scores = scores.drop(columns=["people_json"])
+    people = pd.DataFrame(people_rows)
+
     disq = pd.DataFrame(model.get("disq") or [])
     iter_df = pd.DataFrame(model.get("iter") or [])
     summary = pd.DataFrame(model.get("summary") or [])
     meta = pd.DataFrame(model.get("meta") or [])
-    return scores, timeline, nlp_themes, nlp_sent, disq, iter_df, summary, meta
+    return scores, timeline, nlp_themes, nlp_sent, disq, iter_df, summary, meta, linkage, people
 
 
 @st.cache_data
@@ -138,7 +192,7 @@ if uploaded is None:
 
 bundle_bytes = uploaded.getvalue()
 
-scores, timeline, nlp_themes, nlp_sent, disq, iter_df, summary, meta = load_bundle(bundle_bytes)
+scores, timeline, nlp_themes, nlp_sent, disq, iter_df, summary, meta, linkage, people = load_bundle(bundle_bytes)
 
 if scores.empty:
     st.error("That csv did not have any account rows.")
@@ -169,21 +223,6 @@ page = st.sidebar.radio(
     ]
 )
 
-# this is not real arr from the files. i just multiply accounts by a number i pick for the demo.
-st.sidebar.markdown("---")
-st.sidebar.markdown("### Planning assumption")
-assumed_arr = st.sidebar.number_input(
-    "Assumed annual value per account ($)",
-    min_value=5000,
-    max_value=100000,
-    value=25000,
-    step=5000,
-)
-st.sidebar.caption(
-    "Not from this extract. Released ARR is transformed and cannot be turned back into dollars. "
-    "Change this number for the demo."
-)
-
 TIER_ORDER = ["Green", "Yellow", "Red"]
 TIER_COLORS = ["#28a745", "#ffc107", "#dc3545"]
 TIER_LABEL = {"Green": "Green", "Yellow": "Yellow", "Red": "Red"}
@@ -198,6 +237,21 @@ else:
 
 # page 1 is the leadership / overview page
 if page == "Strategic Overview":
+    # this is not real arr from the files. i just multiply accounts by a number i pick for the demo.
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### Planning assumption")
+    assumed_arr = st.sidebar.number_input(
+        "Assumed annual value per account ($)",
+        min_value=5000,
+        max_value=100000,
+        value=25000,
+        step=5000,
+    )
+    st.sidebar.caption(
+        "Not from this extract. Released ARR is transformed and cannot be turned back into dollars. "
+        "Change this number for the demo."
+    )
+
     n_eval = int(len(scores))
     n_red = int((scores["Risk_Tier"].astype(str).str.strip() == "Red").sum()) if "Risk_Tier" in scores.columns else 0
     n_yellow = int((scores["Risk_Tier"].astype(str).str.strip() == "Yellow").sum()) if "Risk_Tier" in scores.columns else 0
@@ -557,6 +611,17 @@ elif page == "Operator Overview":
         else:
             filtered = filtered.iloc[0:0]
 
+    link_opt = st.sidebar.selectbox(
+        "Account linkage",
+        ["All", "Has child sites", "No child sites"],
+    )
+    if "n_child_sites" in filtered.columns:
+        n_kids = pd.to_numeric(filtered["n_child_sites"], errors="coerce").fillna(0)
+        if link_opt == "Has child sites":
+            filtered = filtered[n_kids > 0]
+        elif link_opt == "No child sites":
+            filtered = filtered[n_kids == 0]
+
     st.sidebar.caption(f"{len(filtered):,} account(s) in this list")
     st.sidebar.markdown("### Account")
     all_accounts = sorted(filtered["ent_name"].dropna().unique().tolist()) if "ent_name" in filtered.columns else []
@@ -580,7 +645,6 @@ elif page == "Operator Overview":
         if not acct_row.empty:
             score_val = float(acct_row["Health_Score"].iloc[0]) if "Health_Score" in acct_row.columns else np.nan
             tier_val = str(acct_row["Risk_Tier"].iloc[0]).strip() if "Risk_Tier" in acct_row.columns else "N/A"
-            churn_flag = int(acct_row["Is_Churned"].iloc[0]) if "Is_Churned" in acct_row.columns else 0
             status_val = acct_row["Account Status"].iloc[0] if "Account Status" in acct_row.columns else "n/a"
             days_this = pd.to_numeric(acct_row["Avg_Days_To_Close"], errors="coerce").iloc[0] if "Avg_Days_To_Close" in acct_row.columns else np.nan
             days_known = pd.to_numeric(scores["Avg_Days_To_Close"], errors="coerce")
@@ -615,7 +679,7 @@ elif page == "Operator Overview":
             r1[0].metric("Health Score", f"{score_val:.1f} / 100" if pd.notna(score_val) else "n/a")
             r1[1].metric("Ops Score", f"{ops_val:.1f} / 100" if pd.notna(ops_val) else "n/a")
             r1[2].metric("Risk status", TIER_LABEL.get(tier_val, tier_val))
-            r1[3].metric("What happened", "Churned between Jan-Jun 2025" if churn_flag == 1 else "Stayed")
+            r1[3].metric("Account status", str(status_val))
             st.caption("Health Score = half  logit + half Ops Score. No close time gets a 25 default score on the logit piece. The three scores below make up Ops Score.")
 
             r2 = st.columns(4)
@@ -642,19 +706,46 @@ elif page == "Operator Overview":
             r5[2].metric("Billing dispute flag", _fmt_metric("Has_Billing_Dispute_Flag", "flag"))
             r5[3].metric("Portal deact. stall flag", _fmt_metric("Has_Portal_Deact_Stall_Flag", "flag"))
 
-            if "hierarchy" in acct_row.columns:
-                hier_val = _fmt_metric("hierarchy", "text")
-            elif "is_child" in acct_row.columns:
-                hier_val = "Child site" if str(acct_row["is_child"].iloc[0]).strip().lower() in ("true", "1") else "Parent"
+            n_kids_this = pd.to_numeric(acct_row["n_child_sites"], errors="coerce").iloc[0] if "n_child_sites" in acct_row.columns else np.nan
+            if pd.notna(n_kids_this) and float(n_kids_this) > 0:
+                hier_val = "Parent"
             else:
-                hier_val = "n/a"
+                hier_val = "Standalone"
 
             r6 = st.columns(4)
             r6[0].metric("Hardware fault flag", _fmt_metric("Has_Hardware_Fault_Flag", "flag"))
-            r6[1].metric("Account status", str(status_val))
-            r6[2].metric("Hierarchy", hier_val)
-            r6[3].metric("Child sites", _fmt_metric("n_child_sites", "int") if "n_child_sites" in acct_row.columns else "n/a")
+            r6[1].metric("Hierarchy", hier_val)
+            r6[2].metric("Child sites", _fmt_metric("n_child_sites", "int") if "n_child_sites" in acct_row.columns else "n/a")
 
+            def _as_id(x):
+                if pd.isna(x) or str(x).strip() in ("", "nan", "None"):
+                    return ""
+                s = str(x).strip()
+                try:
+                    return str(int(float(s)))
+                except (TypeError, ValueError):
+                    return s
+
+            people_this = pd.DataFrame()
+            if not people.empty and "ent_num" in acct_row.columns:
+                people_this = people.copy()
+                people_this["_ent"] = people_this["ent_num"].map(_as_id)
+                people_this = people_this[people_this["_ent"] == _as_id(acct_row["ent_num"].iloc[0])]
+            n_people = int(people_this["name"].nunique()) if (not people_this.empty and "name" in people_this.columns) else 0
+            if n_people == 1:
+                one = people_this.iloc[0]
+                one_name = str(one.get("name", "")).strip() or "n/a"
+                roles = sorted({str(x) for x in people_this["role"].dropna().unique()}) if "role" in people_this.columns else []
+                if roles == ["Field engineer"]:
+                    p_label = "Field engineer"
+                elif roles == ["CS owner"]:
+                    p_label = "CS owner"
+                else:
+                    p_label = "Assigned"
+                touches = pd.to_numeric(people_this.get("touches"), errors="coerce").sum() if "touches" in people_this.columns else np.nan
+                r7 = st.columns(4)
+                r7[0].metric(p_label, one_name)
+                r7[1].metric("Touches", f"{int(touches):,}" if pd.notna(touches) else "n/a")
 
             # explain why this account got its color
             if tier_val == "Red":
@@ -789,6 +880,41 @@ elif page == "Operator Overview":
                         show_tl["When"] = pd.to_datetime(show_tl["When"]).dt.strftime("%Y-%m-%d %H:%M")
                     st.dataframe(show_tl.head(100), hide_index=True, width="stretch")
 
+            st.markdown("---")
+            st.subheader("Account linkages")
+            st.caption("Billing sites rolled up to this parent. Health is one score for the parent, not a separate score for each child site.")
+
+            if linkage.empty or "ent_num" not in acct_row.columns:
+                st.info("No account linkage rows in this csv.")
+            else:
+                ent_key = _as_id(acct_row["ent_num"].iloc[0])
+                link = linkage.copy()
+                link["_ent"] = link["ent_num"].map(_as_id)
+                link = link[link["_ent"] == ent_key]
+                if link.empty:
+                    st.info("This account has no billing-site rows in the linkage table.")
+                else:
+                    show_link = pd.DataFrame({
+                        "Billing site": link["account_number"] if "account_number" in link.columns else "",
+                        "Token name": link["account_name"] if "account_name" in link.columns else "",
+                        "Role": link["role"] if "role" in link.columns else "",
+                        "Parent account": link["parent_num"] if "parent_num" in link.columns else "",
+                    })
+                    st.dataframe(show_link, hide_index=True, width="stretch")
+
+            if n_people > 1:
+                st.markdown("---")
+                st.subheader("People involved")
+                st.caption("Field engineers and CS owners on this account in Jul-Dec 2024.")
+                show_p = people_this.copy()
+                keep_p = [c for c in ["name", "role", "touches"] if c in show_p.columns]
+                show_p = show_p[keep_p].rename(columns={"name": "Person", "role": "Role", "touches": "Touches"})
+                if "Touches" in show_p.columns:
+                    show_p = show_p.sort_values(["Touches", "Person"], ascending=[False, True])
+                else:
+                    show_p = show_p.sort_values("Person")
+                st.dataframe(show_p, hide_index=True, width="stretch")
+
 # page 3 is just the model tables (what stayed in, what got dropped)
 else:
     st.title("Model Summary")
@@ -832,17 +958,20 @@ else:
 
     st.markdown("---")
 
-    # rename a couple drop reasons so they match what i want on the page
     st.subheader("Why Variables Were Dropped")
-    st.caption("Official drop reasons only. p-value, VIF, and coverage notes are in the detail column.")
+    st.caption("Drop reasons follow the Methodology 2 list. p-value, VIF, and coverage notes are in the detail column.")
     if not disq.empty:
         disq_view = disq.copy()
         if "reason" in disq_view.columns:
-            feat = disq_view["feature"].astype(str) if "feature" in disq_view.columns else pd.Series("", index=disq_view.index)
-            is_exp = feat.eq("Expansion_Health_Score")
-            disq_view.loc[is_exp, "reason"] = "Does not fit defined health score / not enough time"
-            disq_view.loc[disq_view["reason"].eq("Not actionable"), "reason"] = "Statistically Removed"
-            disq_view.loc[~is_exp & disq_view["reason"].eq("Does not fit defined health score"), "reason"] = "Statistically Removed"
+            disq_view["reason"] = disq_view["reason"].replace({
+                "Statistically Removed": "Not actionable or Lack Statistical Significance",
+                "statistically removed": "Not actionable or Lack Statistical Significance",
+                "Not actionable": "Not actionable or Lack Statistical Significance",
+                "No business value": "Not actionable or Lack Statistical Significance",
+                "No Business Value": "Not actionable or Lack Statistical Significance",
+                "Does not fit defined health score": "Does not fit the defined health score",
+                "Does not fit defined health score / not enough time": "Does not fit the defined health score",
+            })
         st.dataframe(disq_view, hide_index=True, width="stretch")
     else:
         st.info("No variables were dropped.")
